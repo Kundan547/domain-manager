@@ -43,6 +43,67 @@ router.get('/', async (req, res) => {
   }
 });
 
+// Get domain statistics
+router.get('/stats/overview', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT 
+        COUNT(*) as total_domains,
+        COUNT(CASE WHEN expiry_date <= CURRENT_DATE THEN 1 END) as expired_domains,
+        COUNT(CASE WHEN expiry_date <= CURRENT_DATE + INTERVAL '30 days' AND expiry_date > CURRENT_DATE THEN 1 END) as expiring_soon,
+        COUNT(CASE WHEN status = 'active' THEN 1 END) as active_domains,
+        SUM(cost) as total_cost
+      FROM domains 
+      WHERE user_id = $1
+    `, [req.user.id]);
+
+    const sslResult = await pool.query(`
+      SELECT 
+        COUNT(*) as total_ssl,
+        COUNT(CASE WHEN s.valid_until <= CURRENT_DATE THEN 1 END) as expired_ssl,
+        COUNT(CASE WHEN s.valid_until <= CURRENT_DATE + INTERVAL '30 days' AND s.valid_until > CURRENT_DATE THEN 1 END) as expiring_ssl_soon
+      FROM domains d
+      LEFT JOIN ssl_certificates s ON d.id = s.domain_id
+      WHERE d.user_id = $1 AND s.id IS NOT NULL
+    `, [req.user.id]);
+
+    res.json({
+      stats: {
+        ...result.rows[0],
+        ...sslResult.rows[0]
+      }
+    });
+  } catch (error) {
+    console.error('Get stats error:', error);
+    res.status(500).json({ error: 'Failed to fetch statistics' });
+  }
+});
+
+// Get domains expiring soon
+router.get('/expiring-soon', async (req, res) => {
+  try {
+    const days = req.query.days || 30;
+    
+    const result = await pool.query(`
+      SELECT 
+        d.*,
+        s.valid_until as ssl_valid_until,
+        s.status as ssl_status
+      FROM domains d
+      LEFT JOIN ssl_certificates s ON d.id = s.domain_id
+      WHERE d.user_id = $1 
+        AND d.expiry_date <= CURRENT_DATE + INTERVAL '${days} days'
+        AND d.expiry_date > CURRENT_DATE
+      ORDER BY d.expiry_date ASC
+    `, [req.user.id]);
+
+    res.json({ domains: result.rows });
+  } catch (error) {
+    console.error('Get expiring domains error:', error);
+    res.status(500).json({ error: 'Failed to fetch expiring domains' });
+  }
+});
+
 // Get single domain by ID
 router.get('/:id', async (req, res) => {
   try {
@@ -204,67 +265,6 @@ router.delete('/:id', async (req, res) => {
   } catch (error) {
     console.error('Delete domain error:', error);
     res.status(500).json({ error: 'Failed to delete domain' });
-  }
-});
-
-// Get domain statistics
-router.get('/stats/overview', async (req, res) => {
-  try {
-    const result = await pool.query(`
-      SELECT 
-        COUNT(*) as total_domains,
-        COUNT(CASE WHEN expiry_date <= CURRENT_DATE THEN 1 END) as expired_domains,
-        COUNT(CASE WHEN expiry_date <= CURRENT_DATE + INTERVAL '30 days' AND expiry_date > CURRENT_DATE THEN 1 END) as expiring_soon,
-        COUNT(CASE WHEN status = 'active' THEN 1 END) as active_domains,
-        SUM(cost) as total_cost
-      FROM domains 
-      WHERE user_id = $1
-    `, [req.user.id]);
-
-    const sslResult = await pool.query(`
-      SELECT 
-        COUNT(*) as total_ssl,
-        COUNT(CASE WHEN s.valid_until <= CURRENT_DATE THEN 1 END) as expired_ssl,
-        COUNT(CASE WHEN s.valid_until <= CURRENT_DATE + INTERVAL '30 days' AND s.valid_until > CURRENT_DATE THEN 1 END) as expiring_ssl_soon
-      FROM domains d
-      LEFT JOIN ssl_certificates s ON d.id = s.domain_id
-      WHERE d.user_id = $1 AND s.id IS NOT NULL
-    `, [req.user.id]);
-
-    res.json({
-      stats: {
-        ...result.rows[0],
-        ...sslResult.rows[0]
-      }
-    });
-  } catch (error) {
-    console.error('Get stats error:', error);
-    res.status(500).json({ error: 'Failed to fetch statistics' });
-  }
-});
-
-// Get domains expiring soon
-router.get('/expiring-soon', async (req, res) => {
-  try {
-    const days = req.query.days || 30;
-    
-    const result = await pool.query(`
-      SELECT 
-        d.*,
-        s.valid_until as ssl_valid_until,
-        s.status as ssl_status
-      FROM domains d
-      LEFT JOIN ssl_certificates s ON d.id = s.domain_id
-      WHERE d.user_id = $1 
-        AND d.expiry_date <= CURRENT_DATE + INTERVAL '${days} days'
-        AND d.expiry_date > CURRENT_DATE
-      ORDER BY d.expiry_date ASC
-    `, [req.user.id]);
-
-    res.json({ domains: result.rows });
-  } catch (error) {
-    console.error('Get expiring domains error:', error);
-    res.status(500).json({ error: 'Failed to fetch expiring domains' });
   }
 });
 
